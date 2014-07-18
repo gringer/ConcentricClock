@@ -99,7 +99,7 @@ public class ConcentricClock extends View {
         brushes.setStrokeWidth(bandWidth);
         for(int i = 1; i < 6; i++) {
             float loopAngle = ((60/i) * secAng) % 720;
-            if(loopAngle < 0.1){
+            if((loopAngle < 0.1) || (loopAngle > 719.9)){ // avoid unsightly blank ring
                 loopAngle = 0.1f;
             }
             float loopMod = loopAngle % 360;
@@ -150,25 +150,20 @@ public class ConcentricClock extends View {
     }
 
     public void stopTick() {
-        /* try to remove all traces of the update threads */
+        /* try to remove all traces of the update threads and stop them from running */
         ticking = false;
         clockTicker.cancel(true);
         for(Runnable t : tickerTimer.getQueue()){
             tickerTimer.remove(t);
         }
         clockTicker = null;
-        //clockTicker.pause();
     }
 
     public void startTick() {
-        //clockTicker = new ClockTicker(this);
         if(!ticking) {
             ticking = true;
-//            ClockTicker tClockRunnable = new ClockTicker(this);
             clockTicker = tickerTimer.scheduleWithFixedDelay(new ClockTicker(this),
                     0, refreshRate, TimeUnit.MILLISECONDS);
-            //tClockRunnable.resume();
         }
-        //clockTicker.resume();
     }
 }
