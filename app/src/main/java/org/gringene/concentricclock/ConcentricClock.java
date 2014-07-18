@@ -2,27 +2,50 @@ package org.gringene.concentricclock;
 
 
 import android.content.Context;
+import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
-import android.graphics.Rect;
 import android.graphics.RectF;
 import android.text.format.Time;
 import android.util.AttributeSet;
-import android.view.SurfaceHolder;
-import android.view.SurfaceView;
+import android.util.Log;
+import android.view.View;
 
-public class ConcentricClock extends SurfaceView implements
-        SurfaceHolder.Callback {
-    private SurfaceHolder sh;
+import java.util.Timer;
+import java.util.concurrent.RunnableFuture;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+
+public class ConcentricClock extends View {
+
     private final Paint brushes = new Paint(Paint.ANTI_ALIAS_FLAG);
     private Time mCalendar;
     private float mHours;
     private float mMinutes;
     private float mSeconds;
+    private float mSecFrac;
+
     private float centreX;
     private float centreY;
     private float clockRadius;
+    private float bandWidth;
+
+    private Bitmap backing;
+    private Canvas painting;
+    private int refreshRate = 100;
+    boolean ticking = false;
+
+    private ScheduledThreadPoolExecutor tickerTimer;
+    ScheduledFuture clockTicker = null;
+
+
+    private boolean started = false;
+
+    private void redraw() {
+        this.invalidate();
+    }
 
     public ConcentricClock(Context context) {
         super(context);
@@ -35,57 +58,117 @@ public class ConcentricClock extends SurfaceView implements
     }
 
     private void init(){
-        sh = getHolder();
-        sh.addCallback(this);
         mCalendar = new Time();
-        updateTime();
+        tickerTimer = new ScheduledThreadPoolExecutor(1);
+        startTick();
     }
 
-    private void updateTime(){
+    protected void updateTime(){
         mCalendar.setToNow();
         int hour = mCalendar.hour;
         int min = mCalendar.minute;
         int secInt = mCalendar.second;
-        float secFrac = (mCalendar.toMillis(true) % 1000) / 1000f;
-        float sec = (float) (secInt + (1 - Math.sin((0.5f - secFrac) * Math.PI))/2);
-        mSeconds = sec;
-        mMinutes = mCalendar.minute + sec/60;
-        mHours = mCalendar.hour + mMinutes/60;
-    }
-
-    public void surfaceCreated(SurfaceHolder holder) {
+        mSecFrac = (System.currentTimeMillis() % 1000) / 1000f;
+        mSecFrac = (float) (1 - Math.sin((0.5f - mSecFrac) * Math.PI))/2;
+        mSecFrac = mSecFrac;
+        mSeconds = secInt + mSecFrac;
+        mMinutes = min + mSeconds/60;
+        mHours = hour + mMinutes/60;
+        //Log.d("org.gringene.concentricclock",String.format("Updating time, now %02d:%02d:%02.2f", hour, min, mSeconds));
+        if(started) {
+            drawClock(painting);
+            this.postInvalidate();
+        }
     }
 
     public void drawClock(Canvas tPainting){
         RectF clockRect = new RectF(centreX - clockRadius,
                 centreY - clockRadius, centreX + clockRadius, centreY + clockRadius);
         float startAng = 0;
-        float hour = (mCalendar.hour + (float)mCalendar.minute/60);
-        float hourAng = hour * 30; // 360/12
+        float hourAng = (mHours * 15); // 360/24
+        float minAng = (mMinutes * 6); // 360/60
+        float secAng = (mSeconds * 6) + ((int)mMinutes % 2) * 360; // 360/60
         float hourX = (float)(Math.cos(hourAng) * clockRadius);
         float hourY = (float)(Math.sin(hourAng) * clockRadius);
-        tPainting.drawColor(Color.BLACK);
-        brushes.setColor(Color.BLUE);
+        tPainting.drawColor(Color.WHITE); // fill in background
+        brushes.setColor(Color.GRAY);
         brushes.setStyle(Paint.Style.FILL);
-        tPainting.drawCircle(centreX, centreY, 50, brushes);
+        tPainting.drawCircle(centreX, centreY, bandWidth / 2, brushes);
         brushes.setStyle(Paint.Style.STROKE);
-        brushes.setColor(Color.RED);
-        brushes.setStrokeWidth(3);
-        tPainting.drawArc(clockRect, startAng, hourAng, true, brushes);
-        brushes.setColor(Color.GREEN);
+        brushes.setStrokeCap(Paint.Cap.ROUND);
+        brushes.setStrokeWidth(bandWidth);
+        for(int i = 1; i < 6; i++) {
+            float loopAngle = ((60/i) * secAng) % 720;
+            if(loopAngle < 0.1){
+                loopAngle = 0.1f;
+            }
+            float loopMod = loopAngle % 360;
+            if(loopAngle < 360){
+                tPainting.drawArc(getArcRect(i), minAng - 90, loopMod, false, brushes);
+            } else {
+                tPainting.drawArc(getArcRect(i), minAng+loopMod - 90, (360-loopMod), false, brushes);
+            }
+        }
+        float hourLoopAngle = ((60/6) * secAng) % 720;
+        float hourLoopMod = hourLoopAngle % 360;
+        float hourMod = (hourAng * 2) % 360;
+        if(hourAng < 180) {
+            tPainting.drawArc(getArcRect(6), minAng + hourLoopMod - 90, hourMod, false, brushes);
+        } else {
+            tPainting.drawArc(getArcRect(6), minAng + hourLoopMod + hourMod - 90, (360 - hourMod), false, brushes);
+        }
         brushes.setTextSize(30);
-        tPainting.drawText(String.format("%.2f", hour), centreX, centreY, brushes);
+        brushes.setStrokeWidth(1);
+        brushes.setStyle(Paint.Style.FILL);
+        brushes.setTextAlign(Paint.Align.CENTER);
+        tPainting.drawText(mCalendar.format("%_I:%M"),
+                centreX - bandWidth * 12, centreY - bandWidth * 12, brushes);
+        tPainting.drawText(mCalendar.format("%Y-%b-%d"),
+                centreX + bandWidth * 12, centreY + bandWidth * 12, brushes);
     }
 
-    public void surfaceChanged(SurfaceHolder holder, int format, int width,
-                               int height) {
+    private RectF getArcRect(int arcNum) {
+        float dist = bandWidth * arcNum * 2;
+        return new RectF(centreX - dist, centreY - dist, centreX + dist, centreY + dist);
+    }
+
+    @Override
+    public void onDraw(Canvas canvas) {
+        super.onDraw(canvas);
+        canvas.drawBitmap(backing, 0, 0, null);
+    }
+
+    public void onSizeChanged(int width, int height, int oldWidth, int oldHeight) {
+        backing = Bitmap.createBitmap(width,height, Bitmap.Config.ARGB_8888);
+        painting = new Canvas(backing);
         centreX = width/2f;
         centreY = height/2f;
         clockRadius = Math.min(width,height)/2f;
-        Canvas canvas = sh.lockCanvas();
-        drawClock(canvas);
-        sh.unlockCanvasAndPost(canvas);
+        bandWidth = clockRadius / 16;
+        started = true;
+        updateTime();
     }
-    public void surfaceDestroyed(SurfaceHolder holder) {
+
+    public void stopTick() {
+        /* try to remove all traces of the update threads */
+        ticking = false;
+        clockTicker.cancel(true);
+        for(Runnable t : tickerTimer.getQueue()){
+            tickerTimer.remove(t);
+        }
+        clockTicker = null;
+        //clockTicker.pause();
+    }
+
+    public void startTick() {
+        //clockTicker = new ClockTicker(this);
+        if(!ticking) {
+            ticking = true;
+//            ClockTicker tClockRunnable = new ClockTicker(this);
+            clockTicker = tickerTimer.scheduleWithFixedDelay(new ClockTicker(this),
+                    0, refreshRate, TimeUnit.MILLISECONDS);
+            //tClockRunnable.resume();
+        }
+        //clockTicker.resume();
     }
 }
