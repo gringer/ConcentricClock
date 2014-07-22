@@ -9,6 +9,7 @@ import android.graphics.Paint;
 import android.graphics.RectF;
 import android.text.format.Time;
 import android.util.AttributeSet;
+import android.util.TypedValue;
 import android.view.View;
 
 import java.util.concurrent.ScheduledFuture;
@@ -30,6 +31,7 @@ public class ConcentricClock extends View {
     private Bitmap backing;
     private Canvas painting;
     boolean ticking = false;
+    boolean isDrawing = false;
 
     private ScheduledThreadPoolExecutor tickerTimer;
     ScheduledFuture clockTicker = null;
@@ -71,15 +73,14 @@ public class ConcentricClock extends View {
     }
 
     public void drawClock(Canvas tPainting){
+        isDrawing = true;
         float hourAng = (mHours * 15); // 360/24
         float minAng = (mMinutes * 6); // 360/60
-        float secAng = (mSeconds * 6) + ((int)mMinutes % 2) * 360; // 360/60
+        float secAng = (mSeconds * 12); // 720/60
         tPainting.drawColor(Color.WHITE); // fill in background
-        brushes.setColor(Color.GRAY);
         brushes.setStyle(Paint.Style.FILL);
         tPainting.drawCircle(centreX, centreY, bandWidth / 2, brushes);
         brushes.setStyle(Paint.Style.STROKE);
-        brushes.setStrokeCap(Paint.Cap.ROUND);
         brushes.setStrokeWidth(bandWidth);
         for(int i = 1; i < 6; i++) {
             float loopAngle = ((60/i) * secAng) % 720;
@@ -93,7 +94,7 @@ public class ConcentricClock extends View {
                 tPainting.drawArc(getArcRect(i), minAng+loopMod - 90, (360-loopMod), false, brushes);
             }
         }
-        float hourLoopAngle = ((60/6) * secAng) % 720;
+        float hourLoopAngle = (10 * secAng) % 720; // 10 = 60/6, see for loop above
         float hourLoopMod = hourLoopAngle % 360;
         float hourMod = (hourAng * 2) % 360;
         if(hourAng < 180) {
@@ -101,14 +102,13 @@ public class ConcentricClock extends View {
         } else {
             tPainting.drawArc(getArcRect(6), minAng + hourLoopMod + hourMod - 90, (360 - hourMod), false, brushes);
         }
-        brushes.setTextSize(30);
         brushes.setStrokeWidth(1);
         brushes.setStyle(Paint.Style.FILL);
-        brushes.setTextAlign(Paint.Align.CENTER);
         tPainting.drawText(mCalendar.format("%l:%M"),
                 centreX - bandWidth * 12, centreY - bandWidth * 12, brushes);
-        tPainting.drawText(mCalendar.format("%Y-%b-%d"),
+        tPainting.drawText(mCalendar.format("%b-%d"),
                 centreX + bandWidth * 12, centreY + bandWidth * 12, brushes);
+        isDrawing = false;
     }
 
     private RectF getArcRect(int arcNum) {
@@ -119,7 +119,11 @@ public class ConcentricClock extends View {
     @Override
     public void onDraw(Canvas canvas) {
         super.onDraw(canvas);
-        canvas.drawBitmap(backing, 0, 0, null);
+        if(!isDrawing) {
+            canvas.drawBitmap(backing, 0, 0, null);
+        } else {
+            this.invalidate();
+        }
     }
 
     public void onSizeChanged(int width, int height, int oldWidth, int oldHeight) {
@@ -130,6 +134,10 @@ public class ConcentricClock extends View {
         float clockRadius = Math.min(width, height) / 2f;
         bandWidth = clockRadius / 16;
         started = true;
+        brushes.setTextSize(bandWidth * 2);
+        brushes.setColor(Color.GRAY);
+        brushes.setTextAlign(Paint.Align.CENTER);
+        brushes.setStrokeCap(Paint.Cap.ROUND);
         updateTime();
     }
 
@@ -146,7 +154,7 @@ public class ConcentricClock extends View {
     public void startTick() {
         if(!ticking) {
             ticking = true;
-            int refreshRate = 100;
+            int refreshRate = 50;
             clockTicker = tickerTimer.scheduleWithFixedDelay(new ClockTicker(this),
                     0, refreshRate, TimeUnit.MILLISECONDS);
         }
